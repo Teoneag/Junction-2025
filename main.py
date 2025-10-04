@@ -16,6 +16,8 @@ D(loc, t) = max money u can have at location loc at time t
 
 import csv
 import os
+import pandas as pd
+from pandasgui import show
 
 # Global variables
 Score = None  # Score[loc][t] = money per hour at location loc at time t
@@ -114,11 +116,12 @@ def initialize_dp(start_hour, start_city):
         start_city: City index where the driver starts (home location)
     """
     global D, prev
-    D = [[float('-inf')] * num_times for _ in range(num_locations)]
+    D = [[0.0] * num_times for _ in range(num_locations)]
     prev = [[-1] * num_times for _ in range(num_locations)]
     
-    # Base case: driver starts at start_city at start_hour
+    # Base case: driver starts at start_city at start_hour and earns the score there
     D[start_city][start_hour] = Score[start_city][start_hour]
+    # All other locations at start_hour have 0 (driver can't be there)
 
 
 def solve_dp(user_id, start_hour, start_city, end_hour):
@@ -227,6 +230,41 @@ def reconstruct_path(final_loc, start_hour, end_hour):
     return path
 
 
+def visualize_matrices(start_hour, end_hour):
+    """
+    Visualize the Score and DP matrices using pandasgui
+    
+    Args:
+        start_hour: Starting time index
+        end_hour: Ending time index
+    """
+    # Create data for the DataFrame
+    data = {}
+    
+    for t in range(start_hour, end_hour + 1):
+        col_data = []
+        for loc in range(num_locations):
+            score_val = Score[loc][t]
+            dp_val = D[loc][t]
+            # Format: "S: X.XX | D: Y.YY"
+            cell_str = f"S: {score_val:.2f} | D: {dp_val:.2f}"
+            col_data.append(cell_str)
+        data[f"T={t}"] = col_data
+    
+    # Create DataFrame with city indices as rows
+    df = pd.DataFrame(data, index=[f"City {i+1}" for i in range(num_locations)])
+    
+    # Print to console for reference
+    print("\n=== Score and DP Matrix Visualization ===")
+    print("Format: S: Score | D: DP Value")
+    print("Opening GUI window...")
+    
+    # Open pandasgui window - that's it!
+    show(df, settings={'block': True})
+    
+    return df
+
+
 # Main function to run
 def run(user_id, start_hour, start_city, end_hour):
     """
@@ -254,7 +292,10 @@ def run(user_id, start_hour, start_city, end_hour):
     print(f"\nOptimal path (city indices): {path}")
     print(f"Optimal path (city IDs): {[loc + 1 for loc in path]}")
     
-    return best_money, path
+    # Visualize the matrices
+    df = visualize_matrices(start_hour, end_hour)
+    
+    return best_money, path, df
 
 
 if __name__ == "__main__":
@@ -273,14 +314,14 @@ if __name__ == "__main__":
     print(f"  Fuel cost: €{FUEL_COST_PER_LITER}/L")
     print(f"  Total fuel cost: €{consumBenzen:.4f}/km")
     
-    # Example usage: Driver starts at city 0 (index 0), hour 0, must be home by hour 83
+    # Example usage: Driver works for 8 hours (4 time periods of 2 hours each)
     user_id = "driver_001"
     start_hour = 0
     start_city = 0  # City 1 (index 0)
-    end_hour = 83   # Last time period (2-hour intervals, 0-83 = 84 periods)
+    end_hour = 3    # 8 hours: 0-3 = 4 periods (8 hours total)
     
-    print(f"\nRunning dynamic programming solver...")
+    print(f"\nRunning dynamic programming solver for 8 HOURS...")
     print(f"Driver {user_id} starting at City {start_city + 1} at hour {start_hour}")
     print(f"Must return home by hour {end_hour}")
     
-    best_money, path = run(user_id, start_hour, start_city, end_hour)
+    best_money, path, df = run(user_id, start_hour, start_city, end_hour)
