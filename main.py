@@ -233,13 +233,15 @@ def reconstruct_path(final_loc, start_hour, end_hour):
 def visualize_matrices(start_hour, end_hour):
     """
     Visualize the Score and DP matrices using pandasgui
+    Shows columns from start_hour to end_hour
     
     Args:
         start_hour: Starting time index
         end_hour: Ending time index
     """
-    # Create data for the DataFrame
+    # Create data for the DataFrame - only columns in the working range
     data = {}
+    num_columns = end_hour - start_hour + 1
     
     for t in range(start_hour, end_hour + 1):
         col_data = []
@@ -249,6 +251,7 @@ def visualize_matrices(start_hour, end_hour):
             # Format: "S: X.XX | D: Y.YY"
             cell_str = f"S: {score_val:.2f} | D: {dp_val:.2f}"
             col_data.append(cell_str)
+        # Label columns as relative time (0, 1, 2, ...) or absolute (T=start, T=start+1, ...)
         data[f"T={t}"] = col_data
     
     # Create DataFrame with city indices as rows
@@ -256,8 +259,11 @@ def visualize_matrices(start_hour, end_hour):
     
     # Print to console for reference
     print("\n=== Score and DP Matrix Visualization ===")
+    print(f"Time range: {start_hour} to {end_hour} ({num_columns} periods)")
     print("Format: S: Score | D: DP Value")
-    print("Opening GUI window...")
+    print("\n")
+    print(df.to_string())
+    print("\nOpening GUI window...")
     
     # Open pandasgui window - that's it!
     show(df, settings={'block': True})
@@ -301,7 +307,7 @@ def run(user_id, start_hour, start_city, end_hour):
 if __name__ == "__main__":
     # File paths
     data_dir = "data"
-    score_file = os.path.join(data_dir, "hourly_avg_2h_by_city_avg_over_weeks.csv")
+    score_file = os.path.join(data_dir, "test_69_relocation_schedule_scaled_2_to_8_compact_10_per_city.csv")
     distance_file = os.path.join(data_dir, "nl_cities_adjacency_matrix.csv")
     
     print("Loading data...")
@@ -318,7 +324,7 @@ if __name__ == "__main__":
     user_id = "driver_001"
     start_hour = 0
     start_city = 0  # City 1 (index 0)
-    end_hour = 3    # 8 hours: 0-3 = 4 periods (8 hours total)
+    end_hour = 8    # 8 hours: 0-3 = 4 periods (8 hours total)
     
     print(f"\nRunning dynamic programming solver for 8 HOURS...")
     print(f"Driver {user_id} starting at City {start_city + 1} at hour {start_hour}")
