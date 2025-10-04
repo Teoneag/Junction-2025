@@ -16,6 +16,7 @@ D(loc, t) = max money u can have at location loc at time t
 
 import csv
 import os
+import math
 import pandas as pd
 from pandasgui import show
 
@@ -270,6 +271,52 @@ def shouldWeChangeCity(current_city, current_time, end_city, user_id, end_hour):
     else:
         # Should move to next_position
         return next_position
+
+
+def shouldWeAccept(current_score, expected_score_hour, duration_this_trip_min, c=5.0):
+    """
+    Determine whether to accept a trip based on the decision ratio and probability.
+    
+    This function calculates the acceptance probability using a sigmoid function based on
+    how the current trip score compares to the expected score for the same duration.
+    
+    Formula:
+        expected_score = expected_score_hour / 60 * duration_this_trip_min
+        decision_ratio = current_score / expected_score
+        P = 1 / (1 + e^(-c * (decision_ratio - 1)))
+    
+    Args:
+        current_score: Score/earnings of the current trip being offered
+        expected_score_hour: Expected score per hour at current location/time
+        duration_this_trip_min: Duration of this trip in minutes
+        c: Sigmoid steepness parameter (default 5.0, higher = more decisive)
+    
+    Returns:
+        float: Probability of accepting the trip (0 to 1)
+        bool: Decision - True to accept, False to reject (based on P >= 0.5)
+    """
+    # Calculate expected score for this trip duration
+    expected_score = (expected_score_hour / 60.0) * duration_this_trip_min
+    
+    # Handle edge case: if expected_score is 0 or negative
+    if expected_score <= 0:
+        # If current score is positive, accept; otherwise reject
+        probability = 1.0 if current_score > 0 else 0.0
+        decision = current_score > 0
+        return probability, decision
+    
+    # Calculate decision ratio
+    decision_ratio = current_score / expected_score
+    
+    # Calculate acceptance probability using sigmoid function
+    # P = 1 / (1 + e^(-c * (decision_ratio - 1)))
+    exponent = -c * (decision_ratio - 1)
+    probability = 1.0 / (1.0 + math.exp(exponent))
+    
+    # Make decision based on probability threshold of 0.5
+    decision = probability >= 0.5
+    
+    return probability, decision
 
 
 def visualize_matrices(start_hour, end_hour):
