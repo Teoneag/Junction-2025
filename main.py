@@ -475,6 +475,13 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
             # Decide whether to accept
             probability, accept = shouldWeAccept(trip_score, expected_score_hour, duration_min)
             
+            # Print the result of shouldWeAccept
+            trip_start_time = current_time.strftime("%H:%M")
+            if accept:
+                print(f"[{trip_start_time}] shouldWeAccept: ACCEPT (score={trip_score:.2f}, P={probability:.2f})")
+            else:
+                print(f"[{trip_start_time}] shouldWeAccept: REJECT (score={trip_score:.2f}, P={probability:.2f})")
+            
             if accept:
                 # Accept trip
                 old_city_id = current_city_index + 1
@@ -496,7 +503,7 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                     'probability': probability
                 }
                 events.append(event)
-                print(f"[{event['time']}] TRIP: City {old_city_id} → City {drop_city_id} ({duration_min:.0f} min, +€{net_earnings + tips:.2f}, score={trip_score:.2f}, P={probability:.2f})")
+                print(f"    → TRIP TAKEN: City {old_city_id} → City {drop_city_id} ({duration_min:.0f} min, +€{net_earnings + tips:.2f})")
                 
                 # After completing trip, check if we should relocate again
                 new_time_index = current_time.hour // 2
@@ -507,6 +514,12 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                     user_id,
                     end_hour_index
                 )
+                
+                # Print the result of shouldWeChangeCity
+                if new_city_index is None:
+                    print(f"    → shouldWeChangeCity: STAY at City {current_city_index + 1}")
+                else:
+                    print(f"    → shouldWeChangeCity: MOVE to City {new_city_index + 1}")
                 
                 if new_city_index is not None and new_city_index != current_city_index:
                     old_city_id = current_city_index + 1
@@ -534,7 +547,6 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
             else:
                 # Reject trip
                 trips_rejected += 1
-                print(f"[{current_time.strftime('%H:%M')}] TRIP REJECTED: score={trip_score:.2f}, P={probability:.2f}")
         
         # If no trip was accepted, advance time by 1 minute
         if not trip_accepted:
