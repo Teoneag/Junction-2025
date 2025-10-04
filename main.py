@@ -124,7 +124,7 @@ def initialize_dp(start_hour, start_city):
     # All other locations at start_hour have 0 (driver can't be there)
 
 
-def solve_dp(user_id, start_hour, start_city, end_hour):
+def solve_dp(user_id, start_hour, start_city, end_hour, end_city):
     """
     Solve the DP problem for optimal driver routing
     
@@ -133,6 +133,7 @@ def solve_dp(user_id, start_hour, start_city, end_hour):
         start_hour: Time index where the driver starts
         start_city: City index where the driver starts (home location)
         end_hour: Time index when driver needs to be back home
+        end_city: City index where the driver needs to end up
     
     Returns:
         best_loc: Best city to be at before returning home
@@ -170,18 +171,18 @@ def solve_dp(user_id, start_hour, start_city, end_hour):
                     D[loc][t] = move_money
                     prev[loc][t] = prevLoc
     
-    # Find best final location accounting for return home
-    # For each city, calculate the cost/time to return home and adjust the score
-    best_loc = start_city
-    best_money = D[start_city][end_hour]
+    # Find best final location accounting for return to end_city
+    # For each city, calculate the cost/time to return to end_city and adjust the score
+    best_loc = end_city
+    best_money = D[end_city][end_hour]
     
     for loc in range(num_locations):
-        if loc == start_city:
-            # Already home, no additional cost
+        if loc == end_city:
+            # Already at end city, no additional cost
             adjusted_money = D[loc][end_hour]
         else:
-            # Calculate travel time to get home (in minutes)
-            travel_time_minutes = travel_duration(loc, start_city, end_hour)
+            # Calculate travel time to get to end_city (in minutes)
+            travel_time_minutes = travel_duration(loc, end_city, end_hour)
             # Convert to 2-hour periods (rounding up)
             travel_time_periods = int((travel_time_minutes + 119) // 120)  # Round up to nearest 2-hour period
             
@@ -189,14 +190,14 @@ def solve_dp(user_id, start_hour, start_city, end_hour):
             departure_time = end_hour - travel_time_periods
             
             if departure_time < start_hour:
-                # Not enough time to get home from this location
+                # Not enough time to get to end_city from this location
                 continue
             
-            # Calculate fuel cost to get home
-            dist = distance(loc, start_city)
+            # Calculate fuel cost to get to end_city
+            dist = distance(loc, end_city)
             fuel_cost = consumBenzen * dist
             
-            # Adjusted score = earnings up to departure time - fuel cost to get home
+            # Adjusted score = earnings up to departure time - fuel cost to get to end_city
             adjusted_money = D[loc][departure_time] - fuel_cost
         
         if adjusted_money > best_money:
@@ -228,6 +229,47 @@ def reconstruct_path(final_loc, start_hour, end_hour):
     
     path.reverse()
     return path
+
+
+def shouldWeChangeCity(current_city, current_time, end_city, user_id, end_hour):
+    """
+    Determine if the driver should change cities based on the optimal path from current position.
+    
+    This function runs the DP algorithm from the current position/time, reconstructs the optimal
+    path, and checks if the next location in the path is different from the current location.
+    
+    Args:
+        current_city: City index where the driver is currently located (start position)
+        current_time: Time index representing the current time (start time)
+        end_city: City index where the driver needs to end up
+        user_id: Driver identifier
+        end_hour: Time index when driver needs to be at end_city
+    
+    Returns:
+        None: If the driver should stay in the current city
+        int: City index of where the driver should go if they need to move
+    """
+    # Run the DP algorithm from current position
+    best_loc, best_money = solve_dp(user_id, current_time, current_city, end_hour, end_city)
+    
+    # Reconstruct the optimal path starting from current position/time
+    path = reconstruct_path(best_loc, current_time, end_hour)
+    
+    # Check if we have at least 2 positions in the path (current and next)
+    if len(path) < 2:
+        # Only one time period left or edge case - stay where we are
+        return None
+    
+    # Compare current position with next position in optimal path
+    current_position = path[0]  # Where we are now
+    next_position = path[1]     # Where we should be next
+    
+    if current_position == next_position:
+        # Should stay in current city
+        return None
+    else:
+        # Should move to next_position
+        return next_position
 
 
 def visualize_matrices(start_hour, end_hour):
@@ -272,7 +314,7 @@ def visualize_matrices(start_hour, end_hour):
 
 
 # Main function to run
-def run(user_id, start_hour, start_city, end_hour):
+def run(user_id, start_hour, start_city, end_hour, end_city):
     """
     Run the dynamic programming solution
     
@@ -281,20 +323,21 @@ def run(user_id, start_hour, start_city, end_hour):
         start_hour: Time index where the driver starts
         start_city: City index where the driver starts (home location)
         end_hour: Time index when driver needs to be back home
+        end_city: City index where the driver needs to end up
     
     Returns:
         best_money: Maximum money earned
         path: Optimal path as list of city indices
     """
-    best_loc, best_money = solve_dp(user_id, start_hour, start_city, end_hour)
+    best_loc, best_money = solve_dp(user_id, start_hour, start_city, end_hour, end_city)
     path = reconstruct_path(best_loc, start_hour, end_hour)
     
     print(f"\n=== Results ===")
     print(f"User ID: {user_id}")
     print(f"Start: City {start_city + 1} at hour {start_hour}")
-    print(f"End: Must be home by hour {end_hour}")
+    print(f"End: Must be at City {end_city + 1} by hour {end_hour}")
     print(f"Maximum money: €{best_money:.2f}")
-    print(f"Best location before returning home: City {best_loc + 1}")
+    print(f"Best location before returning: City {best_loc + 1}")
     print(f"\nOptimal path (city indices): {path}")
     print(f"Optimal path (city IDs): {[loc + 1 for loc in path]}")
     
@@ -324,10 +367,11 @@ if __name__ == "__main__":
     user_id = "driver_001"
     start_hour = 0
     start_city = 0  # City 1 (index 0)
+    end_city = 0    # Must return to City 1 (index 0)
     end_hour = 8    # 8 hours: 0-3 = 4 periods (8 hours total)
     
     print(f"\nRunning dynamic programming solver for 8 HOURS...")
     print(f"Driver {user_id} starting at City {start_city + 1} at hour {start_hour}")
-    print(f"Must return home by hour {end_hour}")
+    print(f"Must return to City {end_city + 1} by hour {end_hour}")
     
-    best_money, path, df = run(user_id, start_hour, start_city, end_hour)
+    best_money, path, df = run(user_id, start_hour, start_city, end_hour, end_city)
