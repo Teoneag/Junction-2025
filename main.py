@@ -358,14 +358,15 @@ def save_events_to_csv(events, filename):
         print("No events to save.")
         return
     
-    # Write to CSV - simple format with time and action
+    # Write to CSV - format with time, action, and money
     with open(filename, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['time', 'action'])  # Header
+        writer.writerow(['time', 'action', 'money'])  # Header
         
         for event in events:
             time = event.get('time', '')
             event_type = event.get('type', '')
+            money = event.get('money', 0.0)
             
             # Format action based on event type
             if event_type == 'BREAK':
@@ -379,7 +380,7 @@ def save_events_to_csv(events, filename):
             else:
                 action = event_type
             
-            writer.writerow([time, action])
+            writer.writerow([time, action, f"{money:.2f}"])
     
     print(f"Saved {len(events)} events to {filename}")
 
@@ -490,7 +491,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                 'time': current_time.strftime("%H:%M"),
                 'type': 'BREAK',
                 'duration_min': BREAK_DURATION_MINUTES,
-                'tiredness': tiredness
+                'tiredness': tiredness,
+                'money': total_earnings
             }
             events.append(event)
             print(f"[{event['time']}] BREAK TAKEN ({BREAK_DURATION_MINUTES} min, tiredness={tiredness:.2f}, quality={trip_quality:.2f})")
@@ -531,7 +533,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                 'from_city': old_city_id,
                 'to_city': new_city_id,
                 'duration_min': travel_time_min,
-                'cost': travel_cost
+                'cost': travel_cost,
+                'money': total_earnings
             }
             events.append(event)
             print(f"[{event['time']}] RELOCATE: City {old_city_id} → City {new_city_id} ({travel_time_min:.0f} min, -€{travel_cost:.2f})")
@@ -607,7 +610,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                     'duration_min': duration_min,
                     'earnings': net_earnings + tips,
                     'score': trip_score,
-                    'probability': probability
+                    'probability': probability,
+                    'money': total_earnings
                 }
                 events.append(event)
                 print(f"    → TRIP TAKEN: City {old_city_id} → City {drop_city_id} ({duration_min:.0f} min, +€{net_earnings + tips:.2f})")
@@ -653,7 +657,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                         'from_city': old_city_id,
                         'to_city': new_city_id,
                         'duration_min': travel_time_min,
-                        'cost': travel_cost
+                        'cost': travel_cost,
+                        'money': total_earnings
                     }
                     events.append(event)
                     print(f"[{event['time']}] RELOCATE AFTER TRIP: City {old_city_id} → City {new_city_id} ({travel_time_min:.0f} min, -€{travel_cost:.2f})")
@@ -809,7 +814,7 @@ if __name__ == "__main__":
         user_id="E30001",
         start_city_id=2,  # Start at City 2
         end_city_id=2,    # End at City 2
-        start_time_str="08:00",
+        start_time_str="10:16",
         end_time_str="15:45"
     )
     
