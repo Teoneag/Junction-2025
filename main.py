@@ -16,8 +16,10 @@ D(loc, t) = max money u can have at location loc at time t
 
 import csv
 import os
+import math
 import pandas as pd
 from pandasgui import show
+from tiredness import sigmoid, compute_tiredness, should_take_break, MEAN_TIREDNESS, STD_TIREDNESS, MEAN_QUALITY, STD_QUALITY
 
 # Global variables
 Score = None  # Score[loc][t] = money per hour at location loc at time t
@@ -33,6 +35,9 @@ AVG_SPEED_KMH = 50  # Average speed in km/h
 FUEL_CONSUMPTION_PER_100KM = 7  # Liters per 100 km
 FUEL_COST_PER_LITER = 2  # Euros per liter
 consumBenzen = (FUEL_CONSUMPTION_PER_100KM / 100) * FUEL_COST_PER_LITER  # €0.14 per km
+
+# Break duration constant (other tiredness constants imported from tiredness.py)
+BREAK_DURATION_MINUTES = 15  # Duration of a break in minutes
 
 
 def load_score_data(filepath):
@@ -272,6 +277,392 @@ def shouldWeChangeCity(current_city, current_time, end_city, user_id, end_hour):
         return next_position
 
 
+def shouldWeAccept(current_score, expected_score_hour, duration_this_trip_min, c=5.0):
+    """
+    Determine whether to accept a trip based on the decision ratio and probability.
+    
+    This function calculates the acceptance probability using a sigmoid function based on
+    how the current trip score compares to the expected score for the same duration.
+    
+    Formula:
+        expected_score = expected_score_hour / 60 * duration_this_trip_min
+        decision_ratio = current_score / expected_score
+        P = 1 / (1 + e^(-c * (decision_ratio - 1)))
+    
+    Args:
+        current_score: Score/earnings of the current trip being offered
+        expected_score_hour: Expected score per hour at current location/time
+        duration_this_trip_min: Duration of this trip in minutes
+        c: Sigmoid steepness parameter (default 5.0, higher = more decisive)
+    
+    Returns:
+        float: Probability of accepting the trip (0 to 1)
+        bool: Decision - True to accept, False to reject (based on P >= 0.5)
+    """
+    # Calculate expected score for this trip duration
+    expected_score = (expected_score_hour / 60.0) * duration_this_trip_min
+    
+    # Handle edge case: if expected_score is 0 or negative
+    if expected_score <= 0:
+        # If current score is positive, accept; otherwise reject
+        probability = 1.0 if current_score > 0 else 0.0
+        decision = current_score > 0
+        return probability, decision
+    
+    # Calculate decision ratio
+    decision_ratio = current_score / expected_score
+    
+    # Calculate acceptance probability using sigmoid function
+    # P = 1 / (1 + e^(-c * (decision_ratio - 1)))
+    exponent = -c * (decision_ratio - 1)
+    probability = 1.0 / (1.0 + math.exp(exponent))
+    
+    # Make decision based on probability threshold of 0.5
+    decision = probability >= 0.5
+    
+    return probability, decision
+
+
+def calculate_trip_score(net_earnings, tips, distance_km, safety_price=0.1, safety_score=0.5):
+    """
+    Calculate the score for a trip.
+    
+    Formula: Score = revenue - consumBenzen * km - safety_price * safety
+    
+    Args:
+        net_earnings: Net earnings from the trip
+        tips: Tips received
+        distance_km: Distance traveled in km
+        safety_price: Weight for safety penalty (default 0.1)
+        safety_score: Safety score for the trip (default 0.5, range 0-1)
+    
+    Returns:
+        float: Trip score
+    """
+    revenue = net_earnings + tips
+    fuel_cost = consumBenzen * distance_km
+    safety_penalty = safety_price * safety_score
+    score = revenue - fuel_cost - safety_penalty
+    return score
+
+
+def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_time_str="08:00", end_time_str="16:00"):
+    """
+    Run full simulation of driver behavior using shouldWeChangeCity and shouldWeAccept.
+    
+    Args:
+        trips_csv_path: Path to CSV file with trip data
+        user_id: Driver identifier
+        start_city_id: Starting city ID (1-based, e.g., 1, 2, 3, 4)
+        end_city_id: Ending city ID where driver needs to return
+        start_time_str: Start time as "HH:MM" (default "08:00")
+        end_time_str: End time as "HH:MM" (default "16:00")
+    
+    Returns:
+        dict: Simulation results with metrics
+    """
+    from datetime import datetime, timedelta
+    
+    print(f"\n{'='*60}")
+    print(f"STARTING SIMULATION")
+    print(f"{'='*60}")
+    print(f"Driver: {user_id}")
+    print(f"Start: City {start_city_id} at {start_time_str}")
+    print(f"End: Must be at City {end_city_id} by {end_time_str}")
+    
+    # Load trips from CSV
+    trips = []
+    with open(trips_csv_path, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            trips.append(row)
+    
+    # Parse start and end times (assuming same date as first trip)
+    first_trip_date = trips[0]['start_time'].split()[0]
+    current_time = datetime.strptime(f"{first_trip_date} {start_time_str}:00", "%Y-%m-%d %H:%M:%S")
+    end_time = datetime.strptime(f"{first_trip_date} {end_time_str}:00", "%Y-%m-%d %H:%M:%S")
+    
+    # Convert city IDs to indices (city_index = city_id - 1)
+    current_city_index = start_city_id - 1
+    end_city_index = end_city_id - 1
+    
+    # Simulation state
+    total_earnings = 0.0
+    trips_taken = 0
+    trips_rejected = 0
+    relocations = 0
+    idle_time_minutes = 0
+    breaks_taken = 0
+    
+    # Tiredness tracking - START WITH HIGH TIREDNESS (driver has already driven ~5 hours and 200km)
+    total_hours_driven = 5.0  # Already driven 5 hours today
+    total_kms_driven = 200.0  # Already driven 200 km today
+    hours_since_break = 5.0   # 5 hours since last break
+    kms_since_break = 200.0   # 200 km since last break
+    
+    # Event log
+    events = []
+    
+    # Calculate and display initial tiredness
+    initial_tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                         hours_since_break, kms_since_break)
+    
+    print(f"\nSimulation running from {current_time} to {end_time}")
+    print(f"Driver starts with:")
+    print(f"  - Hours driven: {total_hours_driven:.1f} hours")
+    print(f"  - Distance driven: {total_kms_driven:.1f} km")
+    print(f"  - Hours since break: {hours_since_break:.1f} hours")
+    print(f"  - Initial tiredness: {initial_tiredness:.2f}")
+    print(f"{'='*60}\n")
+    
+    # Main simulation loop (1-minute time steps)
+    trip_index = 0
+    while current_time < end_time:
+        # Convert current time to time index for DP (2-hour blocks)
+        hour_of_day = current_time.hour
+        time_index = hour_of_day // 2  # 2-hour blocks: 0-1=0, 2-3=1, etc.
+        
+        # Convert end time to time index
+        end_hour_index = end_time.hour // 2
+        
+        # Get trip quality (expected score at current location/time)
+        trip_quality = Score[current_city_index][time_index] / 10.0  # Normalize to 0-1 range
+        
+        # PRIORITY 1: Check if driver should take a break
+        take_break = should_take_break(
+            total_hours_driven,
+            hours_since_break,
+            total_kms_driven,
+            kms_since_break,
+            trip_quality
+        )
+        
+        if take_break:
+            # Take a break
+            tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                         hours_since_break, kms_since_break)
+            current_time += timedelta(minutes=BREAK_DURATION_MINUTES)
+            breaks_taken += 1
+            
+            # Reset break counters
+            hours_since_break = 0.0
+            kms_since_break = 0.0
+            
+            event = {
+                'time': current_time.strftime("%H:%M"),
+                'type': 'BREAK',
+                'duration_min': BREAK_DURATION_MINUTES,
+                'tiredness': tiredness
+            }
+            events.append(event)
+            print(f"[{event['time']}] BREAK TAKEN ({BREAK_DURATION_MINUTES} min, tiredness={tiredness:.2f}, quality={trip_quality:.2f})")
+            continue
+        
+        # PRIORITY 2: Check if we should relocate
+        new_city_index = shouldWeChangeCity(
+            current_city_index, 
+            time_index, 
+            end_city_index, 
+            user_id, 
+            end_hour_index
+        )
+        
+        if new_city_index is not None and new_city_index != current_city_index:
+            # Relocate to new city
+            old_city_id = current_city_index + 1
+            new_city_id = new_city_index + 1
+            travel_time_min = travel_duration(current_city_index, new_city_index, time_index)
+            travel_cost = consumBenzen * distance(current_city_index, new_city_index)
+            
+            # Update tiredness tracking
+            relocation_dist = distance(current_city_index, new_city_index)
+            relocation_hours = travel_time_min / 60.0
+            total_hours_driven += relocation_hours
+            total_kms_driven += relocation_dist
+            hours_since_break += relocation_hours
+            kms_since_break += relocation_dist
+            
+            current_city_index = new_city_index
+            current_time += timedelta(minutes=travel_time_min)
+            total_earnings -= travel_cost
+            relocations += 1
+            
+            event = {
+                'time': current_time.strftime("%H:%M"),
+                'type': 'RELOCATE',
+                'from_city': old_city_id,
+                'to_city': new_city_id,
+                'duration_min': travel_time_min,
+                'cost': travel_cost
+            }
+            events.append(event)
+            print(f"[{event['time']}] RELOCATE: City {old_city_id} → City {new_city_id} ({travel_time_min:.0f} min, -€{travel_cost:.2f})")
+            continue
+        
+        # Check for available trips at current time and city
+        available_trips = []
+        while trip_index < len(trips):
+            trip = trips[trip_index]
+            trip_start_time = datetime.strptime(trip['start_time'], "%Y-%m-%d %H:%M:%S")
+            trip_city_id = int(trip['city_id'])
+            
+            # If trip is in the future, break
+            if trip_start_time > current_time:
+                break
+            
+            # If trip matches current time and city (within 1 minute window)
+            time_diff = abs((trip_start_time - current_time).total_seconds() / 60)
+            if time_diff <= 1 and trip_city_id == (current_city_index + 1):
+                available_trips.append((trip_index, trip))
+            
+            trip_index += 1
+        
+        # Process available trips
+        trip_accepted = False
+        for idx, trip in available_trips:
+            trip_city_id = int(trip['city_id'])
+            drop_city_id = int(trip['drop_city'])
+            net_earnings = float(trip['net_earnings'])
+            tips = float(trip['tips'])
+            distance_km = float(trip['distance_km'])
+            duration_min = float(trip['duration_mins'])
+            
+            # Calculate trip score
+            trip_score = calculate_trip_score(net_earnings, tips, distance_km)
+            
+            # Get expected score for current location/time
+            expected_score_hour = Score[current_city_index][time_index]
+            
+            # Decide whether to accept
+            probability, accept = shouldWeAccept(trip_score, expected_score_hour, duration_min)
+            
+            # Print the result of shouldWeAccept
+            trip_start_time = current_time.strftime("%H:%M")
+            if accept:
+                print(f"[{trip_start_time}] shouldWeAccept: ACCEPT (score={trip_score:.2f}, P={probability:.2f})")
+            else:
+                print(f"[{trip_start_time}] shouldWeAccept: REJECT (score={trip_score:.2f}, P={probability:.2f})")
+            
+            if accept:
+                # Accept trip
+                old_city_id = current_city_index + 1
+                
+                # Update tiredness tracking
+                trip_hours = duration_min / 60.0
+                total_hours_driven += trip_hours
+                total_kms_driven += distance_km
+                hours_since_break += trip_hours
+                kms_since_break += distance_km
+                
+                current_city_index = drop_city_id - 1
+                current_time += timedelta(minutes=duration_min)
+                total_earnings += net_earnings + tips
+                trips_taken += 1
+                trip_accepted = True
+                
+                event = {
+                    'time': current_time.strftime("%H:%M"),
+                    'type': 'TRIP_ACCEPTED',
+                    'ride_id': trip['ride_id'][:8],
+                    'from_city': old_city_id,
+                    'to_city': drop_city_id,
+                    'duration_min': duration_min,
+                    'earnings': net_earnings + tips,
+                    'score': trip_score,
+                    'probability': probability
+                }
+                events.append(event)
+                print(f"    → TRIP TAKEN: City {old_city_id} → City {drop_city_id} ({duration_min:.0f} min, +€{net_earnings + tips:.2f})")
+                
+                # After completing trip, check if we should relocate again
+                new_time_index = current_time.hour // 2
+                new_city_index = shouldWeChangeCity(
+                    current_city_index,
+                    new_time_index,
+                    end_city_index,
+                    user_id,
+                    end_hour_index
+                )
+                
+                # Print the result of shouldWeChangeCity
+                if new_city_index is None:
+                    print(f"    → shouldWeChangeCity: STAY at City {current_city_index + 1}")
+                else:
+                    print(f"    → shouldWeChangeCity: MOVE to City {new_city_index + 1}")
+                
+                if new_city_index is not None and new_city_index != current_city_index:
+                    old_city_id = current_city_index + 1
+                    new_city_id = new_city_index + 1
+                    travel_time_min = travel_duration(current_city_index, new_city_index, new_time_index)
+                    travel_cost = consumBenzen * distance(current_city_index, new_city_index)
+                    
+                    # Update tiredness tracking
+                    relocation_dist = distance(current_city_index, new_city_index)
+                    relocation_hours = travel_time_min / 60.0
+                    total_hours_driven += relocation_hours
+                    total_kms_driven += relocation_dist
+                    hours_since_break += relocation_hours
+                    kms_since_break += relocation_dist
+                    
+                    current_city_index = new_city_index
+                    current_time += timedelta(minutes=travel_time_min)
+                    total_earnings -= travel_cost
+                    relocations += 1
+                    
+                    event = {
+                        'time': current_time.strftime("%H:%M"),
+                        'type': 'RELOCATE_AFTER_TRIP',
+                        'from_city': old_city_id,
+                        'to_city': new_city_id,
+                        'duration_min': travel_time_min,
+                        'cost': travel_cost
+                    }
+                    events.append(event)
+                    print(f"[{event['time']}] RELOCATE AFTER TRIP: City {old_city_id} → City {new_city_id} ({travel_time_min:.0f} min, -€{travel_cost:.2f})")
+                
+                break
+            else:
+                # Reject trip
+                trips_rejected += 1
+        
+        # If no trip was accepted, advance time by 1 minute
+        if not trip_accepted:
+            current_time += timedelta(minutes=1)
+            idle_time_minutes += 1
+    
+    # Summary
+    final_tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                       hours_since_break, kms_since_break)
+    print(f"\n{'='*60}")
+    print(f"SIMULATION COMPLETE")
+    print(f"{'='*60}")
+    print(f"Total Earnings: €{total_earnings:.2f}")
+    print(f"Trips Taken: {trips_taken}")
+    print(f"Trips Rejected: {trips_rejected}")
+    print(f"Relocations: {relocations}")
+    print(f"Breaks Taken: {breaks_taken}")
+    print(f"Idle Time: {idle_time_minutes} minutes ({idle_time_minutes/60:.1f} hours)")
+    print(f"Total Hours Driven: {total_hours_driven:.2f} hours")
+    print(f"Total KMs Driven: {total_kms_driven:.2f} km")
+    print(f"Final Tiredness: {final_tiredness:.2f}")
+    print(f"Final City: {current_city_index + 1}")
+    print(f"{'='*60}\n")
+    
+    return {
+        'total_earnings': total_earnings,
+        'trips_taken': trips_taken,
+        'trips_rejected': trips_rejected,
+        'relocations': relocations,
+        'breaks_taken': breaks_taken,
+        'idle_time_minutes': idle_time_minutes,
+        'total_hours_driven': total_hours_driven,
+        'total_kms_driven': total_kms_driven,
+        'final_tiredness': final_tiredness,
+        'final_city': current_city_index + 1,
+        'events': events
+    }
+
+
 def visualize_matrices(start_hour, end_hour):
     """
     Visualize the Score and DP matrices using pandasgui
@@ -352,6 +743,7 @@ if __name__ == "__main__":
     data_dir = "data"
     score_file = os.path.join(data_dir, "test_69_relocation_schedule_scaled_2_to_8_compact_10_per_city.csv")
     distance_file = os.path.join(data_dir, "nl_cities_adjacency_matrix.csv")
+    trips_file = os.path.join(data_dir, "testing-data-good-vladutz.csv")
     
     print("Loading data...")
     city_ids, time_periods = load_score_data(score_file)
@@ -363,15 +755,32 @@ if __name__ == "__main__":
     print(f"  Fuel cost: €{FUEL_COST_PER_LITER}/L")
     print(f"  Total fuel cost: €{consumBenzen:.4f}/km")
     
-    # Example usage: Driver works for 8 hours (4 time periods of 2 hours each)
-    user_id = "driver_001"
-    start_hour = 0
-    start_city = 0  # City 1 (index 0)
-    end_city = 0    # Must return to City 1 (index 0)
-    end_hour = 8    # 8 hours: 0-3 = 4 periods (8 hours total)
+    # Run simulation with testing data
+    print("\n" + "="*60)
+    print("RUNNING SIMULATION WITH TESTING DATA")
+    print("="*60)
     
-    print(f"\nRunning dynamic programming solver for 8 HOURS...")
-    print(f"Driver {user_id} starting at City {start_city + 1} at hour {start_hour}")
-    print(f"Must return to City {end_city + 1} by hour {end_hour}")
+    results = run_simulation(
+        trips_csv_path=trips_file,
+        user_id="E30001",
+        start_city_id=2,  # Start at City 2
+        end_city_id=2,    # End at City 2
+        start_time_str="08:00",
+        end_time_str="22:00"
+    )
+    
+    # Optionally, you can also run the DP solution for comparison
+    # Uncomment below to run DP solver
+    """
+    print("\n" + "="*60)
+    print("RUNNING DP SOLVER FOR COMPARISON")
+    print("="*60)
+    
+    user_id = "driver_001"
+    start_hour = 4  # 8:00 AM = hour 8, index 4 (8//2)
+    start_city = 1  # City 2 (index 1)
+    end_city = 1    # Must return to City 2 (index 1)
+    end_hour = 8    # 16:00 = hour 16, index 8 (16//2)
     
     best_money, path, df = run(user_id, start_hour, start_city, end_hour, end_city)
+    """
