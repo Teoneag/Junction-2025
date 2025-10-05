@@ -346,6 +346,44 @@ def calculate_trip_score(net_earnings, tips, distance_km, safety_price=0.1, safe
     return score
 
 
+def save_events_to_csv(events, filename):
+    """
+    Save simulation events to a CSV file.
+    
+    Args:
+        events: List of event dictionaries
+        filename: Output CSV filename
+    """
+    if not events:
+        print("No events to save.")
+        return
+    
+    # Write to CSV - simple format with time and action
+    with open(filename, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['time', 'action'])  # Header
+        
+        for event in events:
+            time = event.get('time', '')
+            event_type = event.get('type', '')
+            
+            # Format action based on event type
+            if event_type == 'BREAK':
+                action = 'BREAK TAKEN'
+            elif event_type == 'RELOCATE':
+                action = f"RELOCATE: City {event.get('from_city')} → City {event.get('to_city')}"
+            elif event_type == 'RELOCATE_AFTER_TRIP':
+                action = f"RELOCATE AFTER TRIP: City {event.get('from_city')} → City {event.get('to_city')}"
+            elif event_type == 'TRIP_ACCEPTED':
+                action = f"TRIP: City {event.get('from_city')} → City {event.get('to_city')}"
+            else:
+                action = event_type
+            
+            writer.writerow([time, action])
+    
+    print(f"Saved {len(events)} events to {filename}")
+
+
 def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_time_str="08:00", end_time_str="16:00"):
     """
     Run full simulation of driver behavior using shouldWeChangeCity and shouldWeAccept.
@@ -648,6 +686,11 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
     print(f"Final City: {current_city_index + 1}")
     print(f"{'='*60}\n")
     
+    # Save events to CSV
+    output_csv = f"simulation_output.csv"
+    save_events_to_csv(events, output_csv)
+    print(f"Events saved to: {output_csv}\n")
+    
     return {
         'total_earnings': total_earnings,
         'trips_taken': trips_taken,
@@ -659,7 +702,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
         'total_kms_driven': total_kms_driven,
         'final_tiredness': final_tiredness,
         'final_city': current_city_index + 1,
-        'events': events
+        'events': events,
+        'output_csv': output_csv
     }
 
 
@@ -766,7 +810,7 @@ if __name__ == "__main__":
         start_city_id=2,  # Start at City 2
         end_city_id=2,    # End at City 2
         start_time_str="08:00",
-        end_time_str="22:00"
+        end_time_str="15:45"
     )
     
     # Optionally, you can also run the DP solution for comparison
