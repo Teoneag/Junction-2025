@@ -19,6 +19,7 @@ import os
 import math
 import pandas as pd
 from pandasgui import show
+from tiredness import sigmoid, compute_tiredness, should_take_break, MEAN_TIREDNESS, STD_TIREDNESS, MEAN_QUALITY, STD_QUALITY
 
 # Global variables
 Score = None  # Score[loc][t] = money per hour at location loc at time t
@@ -34,6 +35,9 @@ AVG_SPEED_KMH = 50  # Average speed in km/h
 FUEL_CONSUMPTION_PER_100KM = 7  # Liters per 100 km
 FUEL_COST_PER_LITER = 2  # Euros per liter
 consumBenzen = (FUEL_CONSUMPTION_PER_100KM / 100) * FUEL_COST_PER_LITER  # €0.14 per km
+
+# Break duration constant (other tiredness constants imported from tiredness.py)
+BREAK_DURATION_MINUTES = 15  # Duration of a break in minutes
 
 
 def load_score_data(filepath):
@@ -388,11 +392,27 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
     trips_rejected = 0
     relocations = 0
     idle_time_minutes = 0
+    breaks_taken = 0
+    
+    # Tiredness tracking - START WITH HIGH TIREDNESS (driver has already driven ~5 hours and 200km)
+    total_hours_driven = 5.0  # Already driven 5 hours today
+    total_kms_driven = 200.0  # Already driven 200 km today
+    hours_since_break = 5.0   # 5 hours since last break
+    kms_since_break = 200.0   # 200 km since last break
     
     # Event log
     events = []
     
+    # Calculate and display initial tiredness
+    initial_tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                         hours_since_break, kms_since_break)
+    
     print(f"\nSimulation running from {current_time} to {end_time}")
+    print(f"Driver starts with:")
+    print(f"  - Hours driven: {total_hours_driven:.1f} hours")
+    print(f"  - Distance driven: {total_kms_driven:.1f} km")
+    print(f"  - Hours since break: {hours_since_break:.1f} hours")
+    print(f"  - Initial tiredness: {initial_tiredness:.2f}")
     print(f"{'='*60}\n")
     
     # Main simulation loop (1-minute time steps)
@@ -405,7 +425,40 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
         # Convert end time to time index
         end_hour_index = end_time.hour // 2
         
-        # Check if we should relocate
+        # Get trip quality (expected score at current location/time)
+        trip_quality = Score[current_city_index][time_index] / 10.0  # Normalize to 0-1 range
+        
+        # PRIORITY 1: Check if driver should take a break
+        take_break = should_take_break(
+            total_hours_driven,
+            hours_since_break,
+            total_kms_driven,
+            kms_since_break,
+            trip_quality
+        )
+        
+        if take_break:
+            # Take a break
+            tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                         hours_since_break, kms_since_break)
+            current_time += timedelta(minutes=BREAK_DURATION_MINUTES)
+            breaks_taken += 1
+            
+            # Reset break counters
+            hours_since_break = 0.0
+            kms_since_break = 0.0
+            
+            event = {
+                'time': current_time.strftime("%H:%M"),
+                'type': 'BREAK',
+                'duration_min': BREAK_DURATION_MINUTES,
+                'tiredness': tiredness
+            }
+            events.append(event)
+            print(f"[{event['time']}] BREAK TAKEN ({BREAK_DURATION_MINUTES} min, tiredness={tiredness:.2f}, quality={trip_quality:.2f})")
+            continue
+        
+        # PRIORITY 2: Check if we should relocate
         new_city_index = shouldWeChangeCity(
             current_city_index, 
             time_index, 
@@ -420,6 +473,14 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
             new_city_id = new_city_index + 1
             travel_time_min = travel_duration(current_city_index, new_city_index, time_index)
             travel_cost = consumBenzen * distance(current_city_index, new_city_index)
+            
+            # Update tiredness tracking
+            relocation_dist = distance(current_city_index, new_city_index)
+            relocation_hours = travel_time_min / 60.0
+            total_hours_driven += relocation_hours
+            total_kms_driven += relocation_dist
+            hours_since_break += relocation_hours
+            kms_since_break += relocation_dist
             
             current_city_index = new_city_index
             current_time += timedelta(minutes=travel_time_min)
@@ -485,6 +546,14 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
             if accept:
                 # Accept trip
                 old_city_id = current_city_index + 1
+                
+                # Update tiredness tracking
+                trip_hours = duration_min / 60.0
+                total_hours_driven += trip_hours
+                total_kms_driven += distance_km
+                hours_since_break += trip_hours
+                kms_since_break += distance_km
+                
                 current_city_index = drop_city_id - 1
                 current_time += timedelta(minutes=duration_min)
                 total_earnings += net_earnings + tips
@@ -527,6 +596,14 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
                     travel_time_min = travel_duration(current_city_index, new_city_index, new_time_index)
                     travel_cost = consumBenzen * distance(current_city_index, new_city_index)
                     
+                    # Update tiredness tracking
+                    relocation_dist = distance(current_city_index, new_city_index)
+                    relocation_hours = travel_time_min / 60.0
+                    total_hours_driven += relocation_hours
+                    total_kms_driven += relocation_dist
+                    hours_since_break += relocation_hours
+                    kms_since_break += relocation_dist
+                    
                     current_city_index = new_city_index
                     current_time += timedelta(minutes=travel_time_min)
                     total_earnings -= travel_cost
@@ -554,6 +631,8 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
             idle_time_minutes += 1
     
     # Summary
+    final_tiredness = compute_tiredness(total_hours_driven, total_kms_driven, 
+                                       hours_since_break, kms_since_break)
     print(f"\n{'='*60}")
     print(f"SIMULATION COMPLETE")
     print(f"{'='*60}")
@@ -561,7 +640,11 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
     print(f"Trips Taken: {trips_taken}")
     print(f"Trips Rejected: {trips_rejected}")
     print(f"Relocations: {relocations}")
+    print(f"Breaks Taken: {breaks_taken}")
     print(f"Idle Time: {idle_time_minutes} minutes ({idle_time_minutes/60:.1f} hours)")
+    print(f"Total Hours Driven: {total_hours_driven:.2f} hours")
+    print(f"Total KMs Driven: {total_kms_driven:.2f} km")
+    print(f"Final Tiredness: {final_tiredness:.2f}")
     print(f"Final City: {current_city_index + 1}")
     print(f"{'='*60}\n")
     
@@ -570,7 +653,11 @@ def run_simulation(trips_csv_path, user_id, start_city_id, end_city_id, start_ti
         'trips_taken': trips_taken,
         'trips_rejected': trips_rejected,
         'relocations': relocations,
+        'breaks_taken': breaks_taken,
         'idle_time_minutes': idle_time_minutes,
+        'total_hours_driven': total_hours_driven,
+        'total_kms_driven': total_kms_driven,
+        'final_tiredness': final_tiredness,
         'final_city': current_city_index + 1,
         'events': events
     }
@@ -679,7 +766,7 @@ if __name__ == "__main__":
         start_city_id=2,  # Start at City 2
         end_city_id=2,    # End at City 2
         start_time_str="08:00",
-        end_time_str="16:00"
+        end_time_str="22:00"
     )
     
     # Optionally, you can also run the DP solution for comparison
